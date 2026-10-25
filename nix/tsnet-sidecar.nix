@@ -22,6 +22,8 @@ buildGoModule {
   # tsnet doesn't need CGO; matches the Windows build instruction in README.
   env.CGO_ENABLED = "0";
 
+  __darwinAllowLocalNetworking = true;
+
   # The Go binary is consumed by the daemon, not installed as a top-level
   # tool. We keep $out/bin/tsnet_sidecar so the daemon derivation can
   # symlink/copy from a stable path.

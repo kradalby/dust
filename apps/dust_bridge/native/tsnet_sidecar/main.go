@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tailscale.com/client/tailscale"
+	"tailscale.com/net/netns"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/views"
 )
@@ -34,6 +35,11 @@ var (
 )
 
 func main() {
+	// Opt out only for unprivileged multi-interface deployments; this also disables SOCKS proxy support.
+	if os.Getenv("TS_DISABLE_NETNS") == "1" {
+		netns.SetEnabled(false)
+	}
+
 	// Configure the tsnet Server
 	hostname := os.Getenv("TS_HOSTNAME")
 	if hostname == "" {
@@ -56,6 +62,7 @@ func main() {
 		Hostname:      hostname,
 		Dir:           stateDir,
 		AuthKey:       os.Getenv("TS_AUTHKEY"),
+		ControlURL:    os.Getenv("TS_CONTROL_URL"),
 		AdvertiseTags: nodeTags,
 	}
 	defer srv.Close()
@@ -100,7 +107,12 @@ func main() {
 		authURLMu.Lock()
 		authURL = ""
 		authURLMu.Unlock()
-		verifyTags(srv)
+		lc, err := srv.LocalClient()
+		if err != nil {
+			log.Printf("TAG CHECK: could not get local client: %v", err)
+			return
+		}
+		verifyTags(lc)
 	}()
 
 	// Give the sidecar a moment to initialize before accepting commands
@@ -432,11 +444,22 @@ func exposeIncoming(srv *tsnet.Server, portStr string) {
 
 // joinPeer dials a peer over Tailscale and requests secrets using a token.
 func joinPeer(srv *tsnet.Server, peerAddr, token string) ([]byte, error) {
-	conn, err := srv.Dial(context.Background(), "tcp", fmt.Sprintf("%s:%d", peerAddr, keyExchangePort))
+	if len(token) != 32 {
+		return nil, fmt.Errorf("invalid token length: want 32 bytes")
+	}
+
+	// Bound the whole exchange below the Bridge's command timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := srv.Dial(ctx, "tcp", fmt.Sprintf("%s:%d", peerAddr, keyExchangePort))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial peer %s: %w", peerAddr, err)
 	}
 	defer conn.Close()
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("failed to set peer deadline: %w", err)
+	}
 
 	// Send token
 	_, err = conn.Write([]byte(token))
@@ -655,12 +678,7 @@ func hasMatchingTagView(peerTags *views.Slice[string]) bool {
 // after the node connected. If tags were not granted (e.g. the authenticating
 // user is not in tagOwners, or an untagged auth key was used), the sidecar
 // exits with a fatal error to prevent running without ACL isolation.
-func verifyTags(srv *tsnet.Server) {
-	lc, err := srv.LocalClient()
-	if err != nil {
-		log.Printf("TAG CHECK: could not get local client: %v", err)
-		return
-	}
+func verifyTags(lc *tailscale.LocalClient) {
 	st, err := lc.Status(context.Background())
 	if err != nil {
 		log.Printf("TAG CHECK: could not get status: %v", err)
