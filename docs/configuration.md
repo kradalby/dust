@@ -83,9 +83,11 @@ instead when a rename needs one. See
 
 | Variable      | Required | Default            | Description                                                  |
 | ------------- | -------- | ------------------ | ------------------------------------------------------------ |
+| `TS_CONTROL_URL` | No | Tailscale hosted control | Optional control server URL, e.g. `http://headscale` for local tests. |
+| `TS_DISABLE_NETNS` | No | `0` | Set to `1` to disable interface binding for unprivileged, multi-interface hosts. Also disables Tailscale's `ALL_PROXY` SOCKS support; leave unset when using a SOCKS proxy. |
 | `TS_AUTHKEY`  | No       | —                  | Tailscale auth key. If unset, interactive URL login is used. |
 | `TS_HOSTNAME` | No       | `dust-node-<name>` | Hostname for the node on the tailnet.                        |
-| `TS_TAGS`     | No       | `tag:dust-node`    | Comma-separated Tailscale tags to advertise.                 |
+| `TS_TAGS`     | No       | `tag:dust-node`    | Standalone sidecar only: comma-separated tags to advertise. The daemon supplies its `:dust_bridge, :ts_tags` application setting instead. |
 | `JOIN_IP`     | No       | —                  | Tailscale IP of an existing node to join.                    |
 | `JOIN_TOKEN`  | No       | —                  | One-time invite token for mesh join.                         |
 
@@ -96,6 +98,21 @@ instead when a rename needs one. See
 | `DUST_DATA_DIR` | No       | `~/.dust`   | Root directory for all persistent data. |
 | `DUST_API_PORT` | No       | `4884`      | TCP port for the local HTTP API.        |
 | `DUST_API_BIND` | No       | `127.0.0.1` | IP address the HTTP API binds to.       |
+| `DUST_COOKIE_FILE` | No    | —          | Bootstrap distribution cookie file, read only for fresh genesis without boot JOIN configuration. |
+
+### Bootstrap distribution cookie
+
+Automatic setup uses the persisted cookie first, then a complete
+`JOIN_IP`/`JOIN_TOKEN` pair, then `DUST_COOKIE_FILE`, otherwise a random cookie.
+Configured cookies are trimmed, must contain 1–255 printable ASCII characters,
+and are persisted with mode `0600`. An unreadable or invalid selected credential
+stops the release with a nonzero exit status. Setup remains asynchronous; this
+failure handling is not a pre-distribution startup gate.
+
+Changing the configured file does not rotate an established or joined cookie
+or master key. An explicit runtime join can still adopt another network's
+secrets. Release RPC clients must use the effective current cookie explicitly;
+the bootstrap file does not provide automatic RPC cookie discovery.
 
 ## NixOS
 
@@ -112,11 +129,11 @@ under `services.dust`. Common options:
 | `services.dust.logDir`           | `/var/log/dust`    | Log directory.                                                                                        |
 | `services.dust.apiBind`          | `"127.0.0.1"`      | API bind address (`DUST_API_BIND`).                                                                   |
 | `services.dust.apiPort`          | `4884`             | API TCP port (`DUST_API_PORT`).                                                                       |
-| `services.dust.nodeName`         | `"dust@127.0.0.1"` | `RELEASE_NODE` for the BEAM node.                                                                     |
-| `services.dust.cookieFile`       | `null`             | Path to a file with the Erlang distribution cookie (kept outside the Nix store).                      |
+| `services.dust.nodeName`         | `null`             | Optional `RELEASE_NODE` override. By default, the release discovers the node name from `<dataDir>/node_name`. |
+| `services.dust.cookieFile`       | `null`             | Bootstrap cookie file for fresh genesis, kept outside the Nix store. Persisted cookies and boot JOIN take precedence. |
 | `services.dust.environmentFile`  | `null`             | systemd `EnvironmentFile=` for secrets (e.g. `TS_AUTHKEY`).                                           |
 | `services.dust.openFirewall`     | `false`            | Open `apiPort` in the firewall. Off by default — Dust expects API traffic over loopback or Tailscale. |
-| `services.dust.extraEnvironment` | `{ }`              | Extra env vars on the unit (e.g. `{ TS_TAGS = "tag:dust-node"; }`).                                   |
+| `services.dust.extraEnvironment` | `{ }`              | Extra env vars on the unit (e.g. `{ TS_HOSTNAME = "dust-node-nas"; }`). The daemon does not honor a `TS_TAGS` environment override. |
 
 Example with secrets in a sops-nix file:
 
@@ -128,11 +145,16 @@ Example with secrets in a sops-nix file:
     environmentFile = config.sops.secrets."dust/env".path;
     extraEnvironment = {
       TS_HOSTNAME = "dust-node-${config.networking.hostName}";
-      TS_TAGS = "tag:dust-node";
     };
   };
 }
 ```
+
+The module passes `cookieFile` through systemd `LoadCredential` and
+`DUST_COOKIE_FILE`, so the source can remain readable only by root. A missing
+source still fails systemd credential provisioning, even with persisted state.
+Managed stop uses graceful SIGTERM shutdown with `KillMode=mixed`; it does not
+depend on release RPC authentication or the original bootstrap cookie.
 
 `dustctl` invocations like `dustctl daemon install` / `uninstall` /
 `start` / `stop` are short-circuited on NixOS — the module owns the

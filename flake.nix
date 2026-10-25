@@ -4,6 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    headscale.url = "github:juanfont/headscale/2d220b2eb8be8d31ed603000d0b0be02c2cd94d0";
+
     flake-utils.url = "github:numtide/flake-utils";
 
     flake-compat = {
@@ -12,7 +14,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
+  outputs = { self, nixpkgs, flake-utils, headscale, ... }:
     let
       # The NixOS module is platform-independent; expose it at the top
       # level so users can `imports = [ inputs.dust.nixosModules.default ];`
@@ -140,6 +142,8 @@
 
         checks = {
           inherit (self.packages.${system}) dust dustctl tsnet-sidecar;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          headscale = import ./nix/e2e.nix { inherit pkgs headscale; dustModule = nixosModule; };
         };
       });
 }
