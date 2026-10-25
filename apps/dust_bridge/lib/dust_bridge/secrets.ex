@@ -87,7 +87,7 @@ defmodule Dust.Bridge.Secrets do
   @doc """
   Initializes the node's OTP cookie at startup.
 
-  The function follows a three-step precedence:
+  The function follows this precedence:
 
   1. **Existing cookie** — If a cookie file already exists on disk, it is
      loaded and applied via `Node.set_cookie/2`.
@@ -95,8 +95,9 @@ defmodule Dust.Bridge.Secrets do
      set, the node contacts the specified peer over Tailscale to retrieve
      the OTP cookie and master key. The master key is cached in this Agent
      for `Dust.Core.KeyStore` to adopt on unlock.
-  3. **Genesis** — If no cookie exists and no join config is provided, a
-     fresh random cookie is generated for a new, standalone network.
+  3. **Configured genesis** — If `DUST_COOKIE_FILE` is set, its validated
+     contents are persisted and applied for a new, standalone network.
+  4. **Random genesis** — Otherwise, a fresh random cookie is generated.
   """
   @spec setup() :: :ok
   def setup() do
@@ -114,7 +115,7 @@ defmodule Dust.Bridge.Secrets do
         join_mesh(join_ip, join_token)
       else
         Logger.info(
-          "Bridge Secrets: No secrets found and no join config. Generating genesis OTP cookie..."
+          "Bridge Secrets: No secrets found and no join config. Initializing genesis OTP cookie..."
         )
 
         generate_genesis_cookie(secrets_path)
@@ -147,7 +148,21 @@ defmodule Dust.Bridge.Secrets do
   end
 
   defp generate_genesis_cookie(path) do
-    otp_cookie = :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
+    otp_cookie =
+      case System.get_env("DUST_COOKIE_FILE") do
+        nil ->
+          :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
+
+        credential_path ->
+          cookie = credential_path |> File.read!() |> String.trim()
+
+          unless Regex.match?(~r/\A[\x20-\x7E]{1,255}\z/, cookie) do
+            raise ArgumentError, "DUST_COOKIE_FILE must contain 1-255 printable ASCII characters"
+          end
+
+          cookie
+      end
+
     save_cookie(path, otp_cookie)
     apply_cookie(otp_cookie)
   end

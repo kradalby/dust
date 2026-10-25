@@ -30,7 +30,15 @@ defmodule Dust.Bridge.Setup do
   """
   @spec run() :: :ok
   def run() do
-    Dust.Bridge.Secrets.setup()
+    try do
+      Dust.Bridge.Secrets.setup()
+    rescue
+      error ->
+        Logger.error("Bridge Setup: Secret initialization failed: #{Exception.message(error)}")
+        System.stop(1)
+        # System.stop/1 is asynchronous; this invocation must not expose ports.
+        reraise error, __STACKTRACE__
+    end
 
     Logger.info("Bridge Setup: Informing tsnet sidecar to expose EPMD and Distribution ports")
 

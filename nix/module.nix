@@ -67,10 +67,11 @@ in
       type = lib.types.nullOr lib.types.path;
       default = null;
       description = ''
-        Path to a file containing the Erlang distribution cookie. If set,
-        its contents are loaded into RELEASE_COOKIE at start. Keep this
-        out of the Nix store (e.g. via `sops-nix`) — anything readable by
-        the cookie holder can connect to the BEAM node.
+        Path to a bootstrap Erlang distribution cookie for fresh genesis.
+        Existing persisted cookies and boot-time JOIN credentials take
+        precedence. Changing this file does not rotate an established
+        cookie. Keep it out of the Nix store (e.g. via `sops-nix`) — the
+        cookie holder can connect to the BEAM node.
       '';
     };
 
@@ -92,7 +93,7 @@ in
     extraEnvironment = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
-      example = { TS_TAGS = "tag:dust-node"; };
+      example = { TS_HOSTNAME = "dust-node-nas"; };
       description = "Additional environment variables to set on the daemon unit.";
     };
   };
@@ -132,6 +133,7 @@ in
         RELEASE_TMP = "${cfg.dataDir}/tmp";
       }
       // lib.optionalAttrs (cfg.nodeName != null) { RELEASE_NODE = cfg.nodeName; }
+      // lib.optionalAttrs (cfg.cookieFile != null) { DUST_COOKIE_FILE = "%d/cookie"; }
       // cfg.extraEnvironment;
 
       serviceConfig = {
@@ -139,7 +141,7 @@ in
         User = cfg.user;
         Group = cfg.group;
         ExecStart = "${cfg.package}/bin/dust start";
-        ExecStop = "${cfg.package}/bin/dust stop";
+        KillMode = "mixed";
         Restart = "on-failure";
         RestartSec = 5;
         LimitNOFILE = 65536;
@@ -149,13 +151,9 @@ in
 
         EnvironmentFile = lib.mkIf (cfg.environmentFile != null) cfg.environmentFile;
 
-        # If a cookie file is configured, load it as a credential and
-        # export RELEASE_COOKIE before exec'ing the release script.
+        # systemd makes a service-readable copy of root-owned credentials.
         LoadCredential =
           lib.mkIf (cfg.cookieFile != null) [ "cookie:${toString cfg.cookieFile}" ];
-        ExecStartPre = lib.mkIf (cfg.cookieFile != null) [
-          ''${pkgs.runtimeShell} -c 'export RELEASE_COOKIE="$(cat $CREDENTIALS_DIRECTORY/cookie)"' ''
-        ];
 
         # Hardening. `MemoryDenyWriteExecute` MUST be false — the BEAM JIT
         # and Rust NIFs map W+X pages during code loading.
