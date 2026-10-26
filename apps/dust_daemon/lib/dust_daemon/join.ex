@@ -64,13 +64,8 @@ defmodule Dust.Daemon.Join do
     with {:ok, master_key_b64, otp_cookie} <- bridge_module().join(peer_address, token),
          {:ok, master_key} <- decode_master_key(master_key_b64),
          :ok <- check_key_adoption(master_key, force?),
-         :ok <- Dust.Bridge.Secrets.adopt_joined_secrets(master_key_b64, otp_cookie),
-         {:ok, outcome} <- adopt_master_key(master_key) do
-      if outcome == :deferred do
-        {:ok, outcome}
-      else
-        with :ok <- KeyStore.refresh_secrets(), do: {:ok, outcome}
-      end
+         :ok <- Dust.Bridge.Secrets.adopt_joined_secrets(master_key_b64, otp_cookie) do
+      adopt_master_key(master_key)
     end
   end
 

@@ -1,7 +1,7 @@
 { lib
 , stdenv
 , beamPackages
-, fetchurl
+, fetchFromGitHub
 , rustPlatform
 , cmake
 , gnumake
@@ -38,26 +38,19 @@ let
   pname = "dust";
   version = lib.trim (builtins.readFile ../VERSION);
 
-  # VM-test edits should not rebuild the application and its native dependencies.
-  src = lib.cleanSourceWith {
-    src = ../.;
-    filter = path: _type: path != toString ./.;
-  };
-
-  # The Hex archive omits the lockfile shipped with disk_space v1.0.0.
-  diskSpaceLock = fetchurl {
-    url = "https://raw.githubusercontent.com/waseigo/disk_space/06ac8c5ba2af0074d720d17221cb48a0f0b04e44/Cargo.lock";
-    hash = "sha256-h2EHibEy3s54C/3Hj3vPMtmm6yFpljdfZBMgHUN1eVk=";
-  };
+  src = ../.;
 
   # Fixed-output derivation containing the BEAM-fetched hex deps. Patched
   # post-fetch so the rocksdb dep no longer tries to run `git submodule`,
   # and so `disk_space` (whose hex tarball omits Cargo.lock) has one
-  # pinned for `importCargoLock` below.
-  mixFodDeps = beamPackages.fetchMixDeps {
+  # generated for `importCargoLock` below.
+  #
+  # `cargo` is added via overrideAttrs so we don't drop fetchMixDeps's
+  # default buildInputs (elixir/hex/rebar3/rebar).
+  mixFodDeps = (beamPackages.fetchMixDeps {
     pname = "${pname}-mix-deps";
     inherit src version;
-    hash = "sha256-dhMhQmTTyjVzhWFPso1Rchk23kMAKC+SP07ASD+Nh3U=";
+    hash = "sha256-rdcYD0SpOm6ZOwD1h1V/3NtpZt9ba4/MFlYK5Y3A/I8=";
 
     # Make `mix deps.get` work in the sandbox.
     env = {
@@ -78,18 +71,23 @@ let
       fi
 
       # `disk_space` is a Cargo workspace whose hex package omits
-      # Cargo.lock. Pin it instead of resolving registry versions on every fetch.
+      # Cargo.lock. Generate one here so `importCargoLock` can read it.
       if [ -f $out/disk_space/Cargo.toml ] && [ ! -f $out/disk_space/Cargo.lock ]; then
         chmod -R u+w $out/disk_space
-        cp ${diskSpaceLock} $out/disk_space/Cargo.lock
+        export HOME=$TMPDIR
+        export CARGO_HOME=$TMPDIR/cargo
+        mkdir -p "$CARGO_HOME"
+        (cd $out/disk_space && cargo generate-lockfile)
       fi
     '';
-  };
+  }).overrideAttrs (old: {
+    nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ cargo ];
+  });
 
   # Vendor the Cargo deps for the two Rust NIFs. Both lockfiles live
   # under deps/ inside `mixFodDeps`. Reading them through the FOD output
-  # is IFD. The rs_simd tarball carries its lockfile; disk_space receives
-  # the pinned lockfile above.
+  # is IFD, but it means we don't need to commit copies of the lockfiles
+  # into the repo — the hex-fetched sources are the source of truth.
   rsSimdCargoVendor = rustPlatform.importCargoLock {
     lockFile = "${mixFodDeps}/rs_simd/native/rs_simd_nif/Cargo.lock";
   };

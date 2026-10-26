@@ -84,12 +84,6 @@ defmodule Dust.Core.KeyStore do
 
   def set_key(_), do: {:error, :invalid_key_size}
 
-  @doc "Refresh the served key and current cookie while unlocked; do nothing while locked."
-  @spec refresh_secrets() :: :ok | {:error, term()}
-  def refresh_secrets do
-    GenServer.call(__MODULE__, :refresh_secrets)
-  end
-
   @doc "Returns `true` if this node has a loaded master key."
   @spec has_key?() :: boolean()
   def has_key? do
@@ -207,15 +201,6 @@ defmodule Dust.Core.KeyStore do
 
   def handle_call(:has_key?, _from, %{status: status} = state) do
     {:reply, status == :ready, state}
-  end
-
-  # Serialize with lock/0 so a runtime join cannot republish revoked secrets.
-  def handle_call(:refresh_secrets, _from, %{status: :ready, key: key} = state) do
-    {:reply, serve_secrets(key), state}
-  end
-
-  def handle_call(:refresh_secrets, _from, %{status: :locked} = state) do
-    {:reply, :ok, state}
   end
 
   @spec serve_secrets(binary()) :: :ok
